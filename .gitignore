@@ -1,0 +1,28 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+lib/
+
+# test coverage
+coverage/
+
+# logs
+*.log
+npm-debug.log*
+
+# environment
+.env
+.env.local
+.env.*.local
+
+# typescript cache
+*.tsbuildinfo
+
+# jest cache
+.jest/
+
+# package manager locks (keep one)
+yarn.lock
+pnpm-lock.yaml

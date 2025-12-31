@@ -1,0 +1,45 @@
+{
+    "name": "nullspace",
+    "version": "1.0.0",
+    "description": "ssrf prevention library for node.js",
+    "main": "dist/index.js",
+    "types": "dist/index.d.ts",
+    "files": [
+        "dist"
+    ],
+    "scripts": {
+        "build": "tsc",
+        "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+        "coverage": "npm test -- --coverage",
+        "lint": "eslint src/**/*.ts",
+        "prepublishOnly": "npm run build"
+    },
+    "keywords": [
+        "ssrf",
+        "security",
+        "fetch",
+        "validation",
+        "url",
+        "network",
+        "defense",
+        "cloud",
+        "metadata",
+        "dns-rebinding"
+    ],
+    "author": "bymehul",
+    "license": "MIT",
+    "devDependencies": {
+        "@types/jest": "^29.5.11",
+        "@types/node": "^20.10.6",
+        "jest": "^29.7.0",
+        "ts-jest": "^29.1.1",
+        "typescript": "^5.3.3"
+    },
+    "engines": {
+        "node": ">=18.0.0"
+    },
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/bymehul/nullspace.git"
+    }
+}
