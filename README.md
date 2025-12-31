@@ -47,7 +47,8 @@ await safeFetch(url, {
 
 ## more docs
 
-see [docs.md](./docs.md) for more details.
+- check [how-to-use.md](./how-to-use.md) for examples
+- see [docs.md](./docs.md) for detailed specs
 
 ## license
 
