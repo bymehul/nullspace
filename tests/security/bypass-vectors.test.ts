@@ -233,4 +233,14 @@ describe('ssrf bypass vectors', () => {
             expect(r.valid).toBe(false);
         });
     });
+
+    describe('hostname policy', () => {
+        test('enforces optional hostname allowlist', async () => {
+            const r = await validateURL('http://blocked.example', {
+                allowedHostnames: ['allowed.example'],
+            });
+            expect(r.valid).toBe(false);
+            expect(r.errorCode).toBe('HOST_NOT_ALLOWED');
+        });
+    });
 });

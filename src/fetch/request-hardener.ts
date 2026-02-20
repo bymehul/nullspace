@@ -198,8 +198,10 @@ export function getTimeouts(options: SafeFetchOptions): {
  */
 export function getSizeLimits(options: SafeFetchOptions): {
     maxResponseSize: number;
+    maxResponseHeadersSize: number;
 } {
     return {
         maxResponseSize: options.maxResponseSize ?? DEFAULT_FETCH_OPTIONS.maxResponseSize,
+        maxResponseHeadersSize: options.maxResponseHeadersSize ?? DEFAULT_FETCH_OPTIONS.maxResponseHeadersSize,
     };
 }

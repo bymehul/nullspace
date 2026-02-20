@@ -19,7 +19,7 @@ import {
 import type { RangeCheckResult } from '../types';
 
 // all blocked ipv4 cidr ranges with rfc references
-const BLOCKED_IPV4_RANGES: CIDRRange[] = [
+const DEFAULT_BLOCKED_IPV4_RANGES: CIDRRange[] = [
     // rfc 1122 - "this host on this network"
     parseCIDR('0.0.0.0/8', 'rfc 1122 - this host')!,
 
@@ -66,7 +66,7 @@ const BLOCKED_IPV4_RANGES: CIDRRange[] = [
 ];
 
 // all blocked ipv6 cidr ranges with rfc references
-const BLOCKED_IPV6_RANGES: CIDRRange[] = [
+const DEFAULT_BLOCKED_IPV6_RANGES: CIDRRange[] = [
     // rfc 4291 - unspecified address
     parseCIDR('::/128', 'rfc 4291 - unspecified')!,
 
@@ -94,6 +94,10 @@ const BLOCKED_IPV6_RANGES: CIDRRange[] = [
     // rfc 4291 - multicast
     parseCIDR('ff00::/8', 'rfc 4291 - multicast')!,
 ];
+
+// mutable active range sets (defaults + optional runtime additions)
+const BLOCKED_IPV4_RANGES: CIDRRange[] = [...DEFAULT_BLOCKED_IPV4_RANGES];
+const BLOCKED_IPV6_RANGES: CIDRRange[] = [...DEFAULT_BLOCKED_IPV6_RANGES];
 
 /**
  * checks if an ip address is in any blocked range.
@@ -216,6 +220,34 @@ export function getBlockedRanges(): { ipv4: readonly CIDRRange[]; ipv6: readonly
     };
 }
 
+// checks if two cidr ranges are exactly the same range
+function rangesEqual(a: CIDRRange, b: CIDRRange): boolean {
+    if (a.version !== b.version || a.prefixLength !== b.prefixLength) {
+        return false;
+    }
+
+    if (a.base.length !== b.base.length) {
+        return false;
+    }
+
+    for (let i = 0; i < a.base.length; i++) {
+        if (a.base[i] !== b.base[i]) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+// appends a range if it isn't already present
+function appendRangeIfMissing(range: CIDRRange): void {
+    const target = range.version === 4 ? BLOCKED_IPV4_RANGES : BLOCKED_IPV6_RANGES;
+    const exists = target.some((existing) => rangesEqual(existing, range));
+    if (!exists) {
+        target.push(range);
+    }
+}
+
 /**
  * adds additional blocked ranges (for advanced configuration only).
  * note: this modifies the global state and should only be called at startup.
@@ -224,11 +256,27 @@ export function addBlockedRanges(ranges: Array<{ cidr: string; description: stri
     for (const { cidr, description } of ranges) {
         const parsed = parseCIDR(cidr, description);
         if (parsed) {
-            if (parsed.version === 4) {
-                BLOCKED_IPV4_RANGES.push(parsed);
-            } else {
-                BLOCKED_IPV6_RANGES.push(parsed);
-            }
+            appendRangeIfMissing(parsed);
         }
+    }
+}
+
+/**
+ * replaces runtime custom ranges with the supplied cidr list.
+ * defaults are always preserved.
+ */
+export function setAdditionalBlockedRanges(cidrs: string[]): void {
+    BLOCKED_IPV4_RANGES.length = 0;
+    BLOCKED_IPV6_RANGES.length = 0;
+
+    BLOCKED_IPV4_RANGES.push(...DEFAULT_BLOCKED_IPV4_RANGES);
+    BLOCKED_IPV6_RANGES.push(...DEFAULT_BLOCKED_IPV6_RANGES);
+
+    for (const cidr of cidrs) {
+        const parsed = parseCIDR(cidr, `custom blocked range (${cidr})`);
+        if (!parsed) {
+            throw new Error(`invalid cidr range: ${cidr}`);
+        }
+        appendRangeIfMissing(parsed);
     }
 }

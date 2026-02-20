@@ -1,258 +1,155 @@
-# how to use nullspace
+# How to Use nullspace
 
-a casual guide with examples. grab coffee.
+This guide provides practical examples for common integration patterns.
 
----
-
-## basic fetch
-
-the simplest case - just fetch with protection:
+## Basic Fetch
 
 ```typescript
 import { safeFetch } from 'nullspace';
 
 const res = await safeFetch('https://api.example.com/users');
 
-console.log(res.status);        // 200
-console.log(res.body.toString()); // response body
-console.log(res.connectedIP);   // actual ip connected to
+console.log(res.status);
+console.log(res.body.toString());
+console.log(res.connectedIP);
 ```
 
----
-
-## validate without fetching
-
-sometimes you just wanna check if a url is safe:
+## Validate Without Fetching
 
 ```typescript
 import { validateURL } from 'nullspace';
 
 const result = await validateURL(userInput);
 
-if (result.valid) {
-  console.log('safe to fetch');
-  console.log('resolved ips:', result.resolvedIPs);
-} else {
-  console.log('blocked:', result.error);
-  console.log('reason:', result.errorCode);
+if (!result.valid) {
+  console.error(result.errorCode, result.error);
 }
 ```
 
----
+## Validate with Hostname Policy
 
-## check a single ip
+```typescript
+import { validateURL } from 'nullspace';
 
-quick ip check, no dns involved:
+const result = await validateURL('https://api.example.com/data', {
+  allowedHostnames: ['api.example.com'],
+  dnsTimeout: 3000,
+});
+```
+
+## Check a Single IP
 
 ```typescript
 import { isIPAllowed } from 'nullspace';
 
-isIPAllowed('8.8.8.8');          // true - public
-isIPAllowed('127.0.0.1');        // false - loopback
-isIPAllowed('192.168.1.1');      // false - private
-isIPAllowed('169.254.169.254');  // false - cloud metadata
-isIPAllowed('::1');              // false - ipv6 loopback
+isIPAllowed('8.8.8.8');          // true
+isIPAllowed('127.0.0.1');        // false
+isIPAllowed('192.168.1.1');      // false
+isIPAllowed('169.254.169.254');  // false
+isIPAllowed('::1');              // false
 ```
 
----
-
-## all fetch options
-
-here's everything you can pass:
+## Full `safeFetch` Options
 
 ```typescript
+import { safeFetch } from 'nullspace';
+
 const res = await safeFetch('https://api.example.com', {
-  // http method
-  method: 'POST',  // GET, HEAD, POST, PUT, DELETE, PATCH
-  
-  // request body
+  method: 'POST',
   body: JSON.stringify({ name: 'test' }),
-  
-  // headers (sensitive ones get stripped automatically)
   headers: {
     'Content-Type': 'application/json',
     'X-Custom': 'value',
   },
-  
-  // redirects (disabled by default - safer)
-  followRedirects: false,
-  maxRedirects: 0,
-  
-  // timeouts
-  connectTimeout: 5000,   // 5s to establish connection
-  responseTimeout: 30000, // 30s total response time
-  
-  // limits
-  maxResponseSize: 10 * 1024 * 1024, // 10mb max
-  
-  // security
-  stripSensitiveHeaders: true,  // removes auth, cookies, etc
+  followRedirects: true,
+  maxRedirects: 5,
+  connectTimeout: 5000,
+  responseTimeout: 30000,
+  totalTimeout: 60000,
+  maxResponseSize: 10 * 1024 * 1024,
+  maxResponseHeadersSize: 32 * 1024,
+  stripSensitiveHeaders: true,
   userAgent: 'my-app/1.0',
+  allowedHostnames: ['api.example.com'],
 });
 ```
 
----
-
-## handling responses
-
-what you get back:
+## Read Response Fields
 
 ```typescript
 const res = await safeFetch(url);
 
-// status
-res.status;      // 200
-res.statusText;  // 'OK'
-
-// headers
-res.headers;     // { 'content-type': 'application/json', ... }
-
-// body (buffer)
-res.body;                  // <Buffer ...>
-res.body.toString();       // as string
-JSON.parse(res.body.toString()); // as json
-
-// metadata
-res.finalURL;     // final url after redirects
-res.connectedIP;  // ip that was actually connected to
-res.redirectChain; // list of urls if redirects followed
-
-// timing
-res.timing.totalMs;    // total request time
-res.timing.dnsTime;    // dns resolution time
-res.timing.connectTime; // connection established time
+res.status;
+res.statusText;
+res.headers;
+res.body;
+res.body.toString();
+res.finalURL;
+res.connectedIP;
+res.redirectChain;
+res.timing.totalMs;
+res.timing.dnsTime;
+res.timing.connectTime;
 ```
 
----
-
-## error handling
-
-things can fail. here's how to catch them:
+## Error Handling
 
 ```typescript
-import { 
-  safeFetch, 
-  RangeError,
-  DNSError,
-  RequestError,
-  ValidationError 
-} from 'nullspace';
+import { safeFetch } from 'nullspace';
 
 try {
   await safeFetch(url);
-} catch (error) {
-  // check error type
-  if (error.code === 'RANGE_BLOCKED') {
-    console.log('blocked ip:', error.blockedIP);
-    console.log('range:', error.blockedRange);
-  }
-  
-  if (error.code === 'DNS_ERROR') {
-    console.log('hostname:', error.hostname);
-  }
-  
-  if (error.code === 'REQUEST_ERROR') {
-    console.log('connection failed');
-  }
-  
-  // all errors have these
-  console.log(error.code);      // error code
-  console.log(error.message);   // human message
-  console.log(error.input);     // original url
-  console.log(error.timestamp); // when it happened
+} catch (error: any) {
+  console.error(error.code, error.reason, error.message);
 }
 ```
 
----
+## Redirects
 
-## common error codes
-
-| code | what happened |
-|------|---------------|
-| `RANGE_BLOCKED` | ip is private/reserved |
-| `NULL_BYTE_DETECTED` | someone's being sneaky |
-| `AMBIGUOUS_USERINFO` | weird @ symbols in url |
-| `MALFORMED_URL` | url parsing failed |
-| `DNS_ERROR` | couldn't resolve hostname |
-| `CONNECT_TIMEOUT` | took too long to connect |
-| `RESPONSE_TIMEOUT` | response took too long |
-| `RESPONSE_TOO_LARGE` | body exceeded limit |
-| `CONNECTION_REFUSED` | server said no |
-| `CONNECTION_RESET` | connection dropped |
-
----
-
-## following redirects
-
-disabled by default (safer). if you need them:
+Redirects are disabled by default.
 
 ```typescript
 const res = await safeFetch(url, {
   followRedirects: true,
-  maxRedirects: 5,  // limit hops
+  maxRedirects: 5,
 });
 
-// see where we ended up
 console.log(res.finalURL);
 console.log(res.redirectChain);
 ```
 
-each redirect gets fully validated. no sneaky redirects to localhost.
-
----
-
-## post with json
-
-common pattern:
+## Webhook / User URL Pattern
 
 ```typescript
-const res = await safeFetch('https://api.example.com/users', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({
-    name: 'user',
-    email: 'user@example.com',
-  }),
-});
+import { validateURL, safeFetch } from 'nullspace';
 
-const user = JSON.parse(res.body.toString());
-```
+async function sendWebhook(userURL: string): Promise<boolean> {
+  const check = await validateURL(userURL, {
+    allowedHostnames: ['hooks.example.com'],
+  });
 
----
-
-## webhooks / user urls
-
-classic ssrf scenario - user gives you a url:
-
-```typescript
-async function handleWebhook(userUrl: string) {
-  // validate first
-  const check = await validateURL(userUrl);
-  
   if (!check.valid) {
-    throw new Error(`invalid url: ${check.error}`);
+    throw new Error(`invalid URL: ${check.errorCode}`);
   }
-  
-  // safe to fetch
-  const res = await safeFetch(userUrl, {
+
+  const res = await safeFetch(userURL, {
     method: 'POST',
     body: JSON.stringify({ event: 'user.created' }),
     headers: { 'Content-Type': 'application/json' },
     connectTimeout: 10000,
     responseTimeout: 30000,
+    totalTimeout: 60000,
   });
-  
+
   return res.status === 200;
 }
 ```
 
----
-
-## batch validation
-
-check multiple urls:
+## Batch Validation
 
 ```typescript
+import { validateURL } from 'nullspace';
+
 async function validateUrls(urls: string[]) {
   const results = await Promise.all(
     urls.map(async (url) => ({
@@ -260,20 +157,15 @@ async function validateUrls(urls: string[]) {
       result: await validateURL(url),
     }))
   );
-  
-  const valid = results.filter(r => r.result.valid);
-  const blocked = results.filter(r => !r.result.valid);
-  
-  console.log(`${valid.length} valid, ${blocked.length} blocked`);
-  return valid.map(r => r.url);
+
+  return {
+    valid: results.filter((x) => x.result.valid).map((x) => x.url),
+    blocked: results.filter((x) => !x.result.valid),
+  };
 }
 ```
 
----
-
-## express middleware example
-
-protect your proxy endpoint:
+## Express Middleware Example
 
 ```typescript
 import express from 'express';
@@ -283,33 +175,29 @@ const app = express();
 
 app.get('/fetch', async (req, res) => {
   const url = req.query.url as string;
-  
+
   if (!url) {
     return res.status(400).json({ error: 'url required' });
   }
-  
-  // validate
+
   const check = await validateURL(url);
   if (!check.valid) {
-    return res.status(403).json({ 
-      error: 'blocked', 
-      reason: check.errorCode 
-    });
+    return res.status(403).json({ error: 'blocked', reason: check.errorCode });
   }
-  
-  // fetch
+
   try {
-    const result = await safeFetch(url, { responseTimeout: 10000 });
+    const result = await safeFetch(url, {
+      responseTimeout: 10000,
+      totalTimeout: 15000,
+      maxResponseSize: 2 * 1024 * 1024,
+    });
+
     res.set('Content-Type', result.headers['content-type'] || 'text/plain');
-    res.send(result.body);
-  } catch (error) {
-    res.status(502).json({ error: 'fetch failed' });
+    return res.send(result.body);
+  } catch {
+    return res.status(502).json({ error: 'fetch failed' });
   }
 });
 ```
 
----
-
-## that's it
-
-if something's not covered here, check [docs.md](./docs.md) for the deep dive.
+For detailed behavior and full policy definitions, see [docs.md](./docs.md).

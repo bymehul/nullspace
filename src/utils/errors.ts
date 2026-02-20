@@ -69,6 +69,7 @@ export type ValidationFailureReason =
     | 'AMBIGUOUS_USERINFO'
     | 'NULL_BYTE_DETECTED'
     | 'WHITESPACE_IN_HOST'
+    | 'HOST_NOT_ALLOWED'
     | 'UNICODE_NORMALIZATION_FAILED';
 
 /**
@@ -186,6 +187,7 @@ export class RequestError extends NullspaceError {
 export type RequestFailureReason =
     | 'CONNECT_TIMEOUT'
     | 'RESPONSE_TIMEOUT'
+    | 'HEADERS_TOO_LARGE'
     | 'RESPONSE_TOO_LARGE'
     | 'CONNECTION_REFUSED'
     | 'CONNECTION_RESET';

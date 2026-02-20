@@ -9,7 +9,14 @@
 export { parseURL, reconstructURL, normalizeForComparison } from './core/url-parser';
 export { validateProtocol, isProtocolAllowed, getAllowedProtocols } from './core/protocol-validator';
 export { canonicalizeIP, tryCanonicalizeIP, isIPAddress, ipEquals } from './core/ip-canonicalizer';
-export { checkIPRange, validateIPRange, getBlockedRanges, addBlockedRanges } from './core/range-classifier';
+export { isHostnameAllowed, validateHostnameAllowlist } from './core/hostname-policy';
+export {
+    checkIPRange,
+    validateIPRange,
+    getBlockedRanges,
+    addBlockedRanges,
+    setAdditionalBlockedRanges,
+} from './core/range-classifier';
 export {
     resolveHost,
     resolveAndValidate,
@@ -27,6 +34,7 @@ export type {
     ResolvedHost,
     RangeCheckResult,
     ValidationResult,
+    ValidateURLOptions,
     SafeFetchOptions,
     SafeFetchResult,
     RequestTiming,
@@ -64,15 +72,19 @@ import { parseURL } from './core/url-parser';
 import { validateProtocol } from './core/protocol-validator';
 import { tryCanonicalizeIP } from './core/ip-canonicalizer';
 import { checkIPRange, validateIPRange } from './core/range-classifier';
+import { validateHostnameAllowlist } from './core/hostname-policy';
 import { resolveAndValidate, selectConnectionIP } from './core/dns-resolver';
-import type { ValidationResult, CanonicalIP } from './types';
+import type { ValidationResult, CanonicalIP, ValidateURLOptions } from './types';
 import { isSSRFError } from './utils/errors';
 
 /**
  * validates a url without making a request.
  * performs full validation pipeline including dns resolution.
  */
-export async function validateURL(url: string): Promise<ValidationResult> {
+export async function validateURL(
+    url: string,
+    options: ValidateURLOptions = {}
+): Promise<ValidationResult> {
     try {
         // step 1: parse url
         const parsedURL = parseURL(url);
@@ -80,7 +92,10 @@ export async function validateURL(url: string): Promise<ValidationResult> {
         // step 2: validate protocol
         validateProtocol(parsedURL);
 
-        // step 3: resolve and validate ip
+        // step 3: optional hostname allowlist
+        validateHostnameAllowlist(parsedURL.hostname, url, options.allowedHostnames);
+
+        // step 4: resolve and validate ip
         let resolvedIPs: CanonicalIP[] = [];
 
         if (parsedURL.isIPLiteral) {
@@ -95,7 +110,7 @@ export async function validateURL(url: string): Promise<ValidationResult> {
             validateIPRange(canonical, url);
             resolvedIPs = [canonical];
         } else {
-            const resolved = await resolveAndValidate(parsedURL.hostname, url);
+            const resolved = await resolveAndValidate(parsedURL.hostname, url, options.dnsTimeout);
             resolvedIPs = [...resolved.ipv4Addresses, ...resolved.ipv6Addresses];
         }
 

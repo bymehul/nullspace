@@ -1,55 +1,66 @@
 # nullspace
 
-ssrf protection that just works. blocks private ips, cloud metadata, dns rebinding.
+Security-first SSRF protection for Node.js outbound HTTP requests.
 
-## install
+`nullspace` validates URLs, blocks private/internal ranges, defends against DNS rebinding, and pins connections to validated IPs.
+
+## Installation
 
 ```bash
 npm install nullspace
 ```
 
-## use
+## Quick Start
 
 ```typescript
 import { safeFetch, validateURL, isIPAllowed } from 'nullspace';
 
-// fetch with protection
-const res = await safeFetch('https://api.example.com/data');
+const response = await safeFetch('https://api.example.com/data');
 
-// validate without fetching  
-const check = await validateURL(userInput);
-if (!check.valid) console.log('blocked:', check.error);
+const check = await validateURL('https://api.example.com/data');
+if (!check.valid) {
+  console.error(check.errorCode, check.error);
+}
 
-// check single ip
-isIPAllowed('8.8.8.8');        // true
-isIPAllowed('127.0.0.1');      // false
+isIPAllowed('8.8.8.8');         // true
+isIPAllowed('127.0.0.1');       // false
 isIPAllowed('169.254.169.254'); // false
 ```
 
-## what gets blocked
+## Key Protections
 
-- localhost (`127.x.x.x`, `::1`)
-- private ips (`10.x`, `172.16-31.x`, `192.168.x`)
-- cloud metadata (`169.254.169.254`)
-- dangerous protocols (`file://`, `gopher://`, `dict://`)
-- encoding tricks (decimal, octal, hex ips)
-- dns rebinding (ttl floor + socket pinning)
+- Restricts protocols to `http` and `https`.
+- Blocks loopback, private, link-local, metadata, multicast, and reserved ranges.
+- Handles IPv4 encoding tricks (decimal, octal, hex, short forms).
+- Handles IPv6 edge cases (`::1`, mapped IPv4, NAT64 embeddings).
+- Rejects hostnames when any resolved record is internal.
+- Resolves CNAME chains with loop and recursion-depth protection.
+- Uses DNS cache floor plus socket pinning for rebinding resistance.
+- Enforces response size, response header size, redirect count, and total timeout limits.
 
-## options
+## Example Options
 
 ```typescript
-await safeFetch(url, {
-  followRedirects: false,     // don't follow
-  connectTimeout: 5000,       // ms
-  maxResponseSize: 10485760,  // 10mb
+await safeFetch('https://api.example.com', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ ok: true }),
+  followRedirects: true,
+  maxRedirects: 5,
+  connectTimeout: 5000,
+  responseTimeout: 30000,
+  totalTimeout: 60000,
+  maxResponseSize: 10 * 1024 * 1024,
+  maxResponseHeadersSize: 32 * 1024,
+  allowedHostnames: ['api.example.com'],
 });
 ```
 
-## more docs
+## Documentation
 
-- check [how-to-use.md](./how-to-use.md) for examples
-- see [docs.md](./docs.md) for detailed specs
+- Usage examples: [how-to-use.md](./how-to-use.md)
+- Technical reference: [docs.md](./docs.md)
 
-## license
+## License
 
-mit
+MIT

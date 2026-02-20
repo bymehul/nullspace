@@ -81,6 +81,15 @@ export interface ValidationResult {
     resolvedIPs?: CanonicalIP[];
 }
 
+// options for validateURL operation
+export interface ValidateURLOptions {
+    // optional strict outbound allowlist (exact host or subdomain match)
+    allowedHostnames?: string[];
+
+    // dns resolution timeout override in milliseconds
+    dnsTimeout?: number;
+}
+
 // options for safe fetch operation
 export interface SafeFetchOptions {
     // http method (default: 'get')
@@ -104,14 +113,23 @@ export interface SafeFetchOptions {
     // total response timeout in milliseconds (default: 30000)
     responseTimeout?: number;
 
+    // absolute timeout for full operation (dns + redirects + response) (default: 60000)
+    totalTimeout?: number;
+
     // maximum response body size in bytes (default: 10mb)
     maxResponseSize?: number;
+
+    // maximum response headers size in bytes (default: 32kb)
+    maxResponseHeadersSize?: number;
 
     // whether to strip sensitive headers from request (default: true)
     stripSensitiveHeaders?: boolean;
 
     // custom user agent (default: 'nullspace/1.0')
     userAgent?: string;
+
+    // optional strict outbound allowlist (exact host or subdomain match)
+    allowedHostnames?: string[];
 }
 
 // timing information for a request
@@ -172,6 +190,12 @@ export interface NullspaceConfig {
     // cannot be set below 60000 to prevent dns rebinding
     dnsCacheTTLFloor?: number;
 
+    // maximum number of dns cache entries before oldest eviction (default: 1024)
+    dnsCacheMaxEntries?: number;
+
+    // maximum cname recursion depth for system resolver (default: 8)
+    maxCNAMEDepth?: number;
+
     // whether to allow ipv6 (default: true)
     // set to false if your infrastructure is ipv4-only
     allowIPv6?: boolean;
@@ -211,13 +235,15 @@ export const SENSITIVE_HEADERS = [
 ] as const;
 
 // default safe fetch options
-export const DEFAULT_FETCH_OPTIONS: Required<Omit<SafeFetchOptions, 'body' | 'headers'>> = {
+export const DEFAULT_FETCH_OPTIONS: Required<Omit<SafeFetchOptions, 'body' | 'headers' | 'allowedHostnames'>> = {
     method: 'GET',
     followRedirects: false,
     maxRedirects: 0,
     connectTimeout: 5000,
     responseTimeout: 30000,
+    totalTimeout: 60000,
     maxResponseSize: 10 * 1024 * 1024, // 10mb
+    maxResponseHeadersSize: 32 * 1024, // 32kb
     stripSensitiveHeaders: true,
     userAgent: 'nullspace/1.0',
 };

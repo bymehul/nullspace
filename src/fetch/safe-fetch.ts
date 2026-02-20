@@ -1,8 +1,8 @@
 /**
  * nullspace - ssrf prevention library
- * 
+ *
  * safe fetch module
- * 
+ *
  * the main entry point for making safe outbound http requests.
  * combines all validation layers into a single secure fetch operation.
  */
@@ -13,6 +13,7 @@ import { parseURL, reconstructURL } from '../core/url-parser';
 import { validateProtocol } from '../core/protocol-validator';
 import { tryCanonicalizeIP } from '../core/ip-canonicalizer';
 import { validateIPRange } from '../core/range-classifier';
+import { validateHostnameAllowlist } from '../core/hostname-policy';
 import { resolveAndValidate, selectConnectionIP } from '../core/dns-resolver';
 import { createPinnedAgent, destroyAgent } from '../core/socket-pinner';
 import {
@@ -32,7 +33,7 @@ import {
     shouldPreserveMethod,
     shouldPreserveBody,
 } from './redirect-handler';
-import { RequestError, RedirectError } from '../utils/errors';
+import { RequestError } from '../utils/errors';
 import type {
     ParsedURL,
     SafeFetchOptions,
@@ -42,17 +43,48 @@ import type {
 } from '../types';
 import { DEFAULT_FETCH_OPTIONS } from '../types';
 
+// computes remaining time until the absolute deadline, throws if exhausted
+function getRemainingTimeout(deadlineAt: number, originalInput: string, totalTimeout: number): number {
+    const remaining = deadlineAt - Date.now();
+    if (remaining <= 0) {
+        throw new RequestError(
+            `total request timeout (${totalTimeout}ms) exceeded`,
+            originalInput,
+            'RESPONSE_TIMEOUT'
+        );
+    }
+    return remaining;
+}
+
+// estimates response header byte size from raw header pairs
+function getHeaderSizeBytes(rawHeaders: string[] | undefined): number {
+    if (!rawHeaders || rawHeaders.length === 0) {
+        return 0;
+    }
+
+    let total = 0;
+
+    for (let i = 0; i < rawHeaders.length; i += 2) {
+        const key = rawHeaders[i] ?? '';
+        const value = rawHeaders[i + 1] ?? '';
+        total += Buffer.byteLength(key) + 2 + Buffer.byteLength(value) + 2;
+    }
+
+    return total;
+}
+
 /**
  * performs a safe http/https fetch with full ssrf protection.
- * 
+ *
  * pipeline:
  * 1. parse and normalize url
  * 2. validate protocol (http/https only)
- * 3. resolve dns (or validate ip literal)
- * 4. validate all resolved ips against blocked ranges
- * 5. create pinned connection to validated ip
- * 6. execute request with hardening
- * 7. handle redirects (if enabled) by repeating pipeline
+ * 3. validate optional hostname allowlist policy
+ * 4. resolve dns (or validate ip literal)
+ * 5. validate all resolved ips against blocked ranges
+ * 6. create pinned connection to validated ip
+ * 7. execute request with hardening
+ * 8. handle redirects (if enabled) by repeating pipeline
  */
 export async function safeFetch(
     url: string,
@@ -64,6 +96,9 @@ export async function safeFetch(
         totalMs: 0,
     };
 
+    const totalTimeout = options.totalTimeout ?? DEFAULT_FETCH_OPTIONS.totalTimeout;
+    const deadlineAt = timing.startTime + totalTimeout;
+
     const redirectChain: string[] = [];
     let currentURL = url;
     let redirectCount = 0;
@@ -74,8 +109,13 @@ export async function safeFetch(
         getSizeLimits(options).maxResponseSize
     );
 
+    let currentMethod: SafeFetchOptions['method'] | 'GET' = options.method;
+    let currentBody = body;
+
     // main request loop (handles redirects)
     while (true) {
+        getRemainingTimeout(deadlineAt, url, totalTimeout);
+
         // step 1: parse url
         const parsedURL = parseURL(currentURL);
         redirectChain.push(reconstructURL(parsedURL));
@@ -83,7 +123,10 @@ export async function safeFetch(
         // step 2: validate protocol
         validateProtocol(parsedURL);
 
-        // step 3 & 4: resolve dns and validate ips
+        // step 3: optional hostname allowlist
+        validateHostnameAllowlist(parsedURL.hostname, url, options.allowedHostnames);
+
+        // step 4 & 5: resolve dns and validate ips
         let targetIP: CanonicalIP;
 
         if (parsedURL.isIPLiteral) {
@@ -101,7 +144,8 @@ export async function safeFetch(
         } else {
             // it's a hostname - resolve and validate
             timing.dnsTime = Date.now();
-            const resolved = await resolveAndValidate(parsedURL.hostname, url);
+            const dnsTimeout = getRemainingTimeout(deadlineAt, url, totalTimeout);
+            const resolved = await resolveAndValidate(parsedURL.hostname, url, dnsTimeout);
 
             // select the best ip to connect to
             const selected = selectConnectionIP(resolved);
@@ -115,33 +159,38 @@ export async function safeFetch(
             targetIP = selected;
         }
 
-        // step 5: create pinned agent
+        // step 6: create pinned agent
         const protocol = parsedURL.protocol === 'https:' ? 'https' : 'http';
         const { connectTimeout, responseTimeout } = getTimeouts(options);
+
+        const remaining = getRemainingTimeout(deadlineAt, url, totalTimeout);
+        const effectiveConnectTimeout = Math.max(1, Math.min(connectTimeout, remaining));
+        const effectiveResponseTimeout = Math.max(1, Math.min(responseTimeout, remaining));
 
         const agent = createPinnedAgent(protocol, {
             targetIP,
             targetPort: parsedURL.port,
             originalHost: parsedURL.hostname,
-            connectTimeout,
+            connectTimeout: effectiveConnectTimeout,
         });
 
         try {
-            // step 6: execute request
+            // step 7: execute request
             const response = await executeRequest(
                 parsedURL,
                 targetIP,
                 agent,
                 options,
-                body,
-                redirectCount === 0 ? options.method : (shouldPreserveMethod(0) ? options.method : 'GET'),
-                responseTimeout
+                currentBody,
+                currentMethod,
+                effectiveResponseTimeout,
+                deadlineAt
             );
 
             timing.connectTime = Date.now();
             timing.firstByteTime = Date.now();
 
-            // step 7: handle redirects
+            // step 8: handle redirects
             if (isRedirectStatus(response.status)) {
                 if (!shouldFollowRedirects(options)) {
                     // return the redirect response as-is
@@ -172,6 +221,18 @@ export async function safeFetch(
                     url,
                     redirectCount
                 );
+
+                // update redirect semantics for next hop
+                const preserveMethod = shouldPreserveMethod(response.status);
+                const preserveBody = shouldPreserveBody(response.status);
+
+                if (!preserveMethod) {
+                    currentMethod = 'GET';
+                }
+
+                if (!preserveBody) {
+                    currentBody = undefined;
+                }
 
                 // continue with redirect
                 currentURL = reconstructURL(redirectURL);
@@ -212,7 +273,8 @@ async function executeRequest(
     options: SafeFetchOptions,
     body: Buffer | undefined,
     method: string | undefined,
-    responseTimeout: number
+    responseTimeout: number,
+    deadlineAt: number
 ): Promise<{
     status: number;
     statusText: string;
@@ -232,6 +294,9 @@ async function executeRequest(
         headers['Content-Length'] = String(body.length);
     }
 
+    const remaining = Math.max(1, deadlineAt - Date.now());
+    const effectiveResponseTimeout = Math.max(1, Math.min(responseTimeout, remaining));
+
     const requestOptions: http.RequestOptions = {
         hostname: targetIP.canonical,
         port: parsedURL.port,
@@ -239,20 +304,61 @@ async function executeRequest(
         method: method ?? DEFAULT_FETCH_OPTIONS.method,
         headers,
         agent,
-        timeout: responseTimeout,
+        timeout: effectiveResponseTimeout,
     };
 
     return new Promise((resolve, reject) => {
+        let settled = false;
+        let timeoutHandle: NodeJS.Timeout | undefined;
+
+        const settleReject = (error: RequestError): void => {
+            if (settled) {
+                return;
+            }
+            settled = true;
+            if (timeoutHandle) {
+                clearTimeout(timeoutHandle);
+            }
+            reject(error);
+        };
+
+        const settleResolve = (result: {
+            status: number;
+            statusText: string;
+            headers: Record<string, string>;
+            body: Buffer;
+        }): void => {
+            if (settled) {
+                return;
+            }
+            settled = true;
+            if (timeoutHandle) {
+                clearTimeout(timeoutHandle);
+            }
+            resolve(result);
+        };
+
         const req = protocol.request(requestOptions, (res) => {
-            const { maxResponseSize } = getSizeLimits(options);
+            const { maxResponseSize, maxResponseHeadersSize } = getSizeLimits(options);
             const buffer = new SizeLimitedBuffer(maxResponseSize);
+
+            const responseHeaderSize = getHeaderSizeBytes(res.rawHeaders);
+            if (responseHeaderSize > maxResponseHeadersSize) {
+                req.destroy();
+                settleReject(new RequestError(
+                    `response headers too large: ${responseHeaderSize} bytes exceeds ${maxResponseHeadersSize}`,
+                    parsedURL.originalURL,
+                    'HEADERS_TOO_LARGE'
+                ));
+                return;
+            }
 
             res.on('data', (chunk: Buffer) => {
                 try {
                     buffer.push(chunk);
-                } catch (error) {
+                } catch {
                     req.destroy();
-                    reject(new RequestError(
+                    settleReject(new RequestError(
                         `response too large: exceeds ${maxResponseSize} bytes`,
                         parsedURL.originalURL,
                         'RESPONSE_TOO_LARGE'
@@ -269,7 +375,7 @@ async function executeRequest(
                     }
                 }
 
-                resolve({
+                settleResolve({
                     status: res.statusCode ?? 0,
                     statusText: res.statusMessage ?? '',
                     headers: responseHeaders,
@@ -278,7 +384,7 @@ async function executeRequest(
             });
 
             res.on('error', (error) => {
-                reject(new RequestError(
+                settleReject(new RequestError(
                     `response error: ${error.message}`,
                     parsedURL.originalURL,
                     'CONNECTION_RESET'
@@ -286,10 +392,19 @@ async function executeRequest(
             });
         });
 
+        timeoutHandle = setTimeout(() => {
+            req.destroy();
+            settleReject(new RequestError(
+                `request timed out after ${effectiveResponseTimeout}ms`,
+                parsedURL.originalURL,
+                'RESPONSE_TIMEOUT'
+            ));
+        }, effectiveResponseTimeout);
+
         req.on('timeout', () => {
             req.destroy();
-            reject(new RequestError(
-                `request timed out after ${responseTimeout}ms`,
+            settleReject(new RequestError(
+                `request timed out after ${effectiveResponseTimeout}ms`,
                 parsedURL.originalURL,
                 'RESPONSE_TIMEOUT'
             ));
@@ -297,25 +412,25 @@ async function executeRequest(
 
         req.on('error', (error: NodeJS.ErrnoException) => {
             if (error.code === 'ECONNREFUSED') {
-                reject(new RequestError(
+                settleReject(new RequestError(
                     `connection refused to ${targetIP.canonical}:${parsedURL.port}`,
                     parsedURL.originalURL,
                     'CONNECTION_REFUSED'
                 ));
             } else if (error.code === 'ECONNRESET') {
-                reject(new RequestError(
+                settleReject(new RequestError(
                     `connection reset by ${targetIP.canonical}`,
                     parsedURL.originalURL,
                     'CONNECTION_RESET'
                 ));
             } else if (error.code === 'ETIMEDOUT') {
-                reject(new RequestError(
+                settleReject(new RequestError(
                     `connection timed out to ${targetIP.canonical}`,
                     parsedURL.originalURL,
                     'CONNECT_TIMEOUT'
                 ));
             } else {
-                reject(new RequestError(
+                settleReject(new RequestError(
                     `request error: ${error.message}`,
                     parsedURL.originalURL,
                     'CONNECTION_RESET'

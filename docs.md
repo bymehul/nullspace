@@ -1,166 +1,162 @@
-# nullspace docs
+# nullspace Technical Reference
 
-the detailed stuff. you probably don't need this unless you're curious.
+## Request Validation Pipeline
 
----
+Every `safeFetch` request follows this flow:
 
-## how it works
+1. Parse and normalize URL input.
+2. Enforce protocol allowlist (`http`/`https`).
+3. Enforce optional hostname allowlist policy.
+4. Resolve DNS with timeout control.
+5. Resolve recursive CNAME chains (with loop/depth checks).
+6. Canonicalize all IPs and validate ranges.
+7. Pin socket connection to the validated IP.
+8. Execute request with redirect, timeout, and size hardening.
 
-6-stage pipeline that runs on every request:
+## Blocked Network Ranges
 
-1. **parse** - whatwg url parser, catches null bytes and weird encodings
-2. **protocol check** - only http/https gets through
-3. **dns resolve** - controlled resolver with 60s ttl floor (anti-rebinding)
-4. **ip canonicalize** - converts all formats to binary for comparison
-5. **range check** - compares against all rfc private/reserved ranges
-6. **socket pin** - connects to the validated ip, not the hostname
+### IPv4
 
----
-
-## blocked ip ranges
-
-### ipv4
-
-| range | why |
-|-------|-----|
+| Range | Reason |
+|---|---|
 | `0.0.0.0/8` | this host |
 | `10.0.0.0/8` | private |
-| `100.64.0.0/10` | carrier-grade nat |
+| `100.64.0.0/10` | carrier-grade NAT |
 | `127.0.0.0/8` | loopback |
-| `169.254.0.0/16` | link-local / cloud metadata |
+| `169.254.0.0/16` | link-local / metadata |
 | `172.16.0.0/12` | private |
+| `192.0.0.0/24` | IETF protocol assignments |
 | `192.168.0.0/16` | private |
 | `224.0.0.0/4` | multicast |
 | `240.0.0.0/4` | reserved |
+| `255.255.255.255/32` | broadcast |
 
-### ipv6
+### IPv6
 
-| range | why |
-|-------|-----|
+| Range | Reason |
+|---|---|
+| `::/128` | unspecified |
 | `::1/128` | loopback |
-| `::ffff:0:0/96` | ipv4-mapped (embedded ip checked) |
-| `64:ff9b::/96` | nat64 (embedded ip checked) |
-| `fc00::/7` | unique local (private) |
+| `::ffff:0:0/96` | IPv4-mapped IPv6 |
+| `64:ff9b::/96` | NAT64 embedding |
+| `100::/64` | discard-only |
+| `2001:db8::/32` | documentation |
+| `fc00::/7` | unique local |
 | `fe80::/10` | link-local |
 | `ff00::/8` | multicast |
 
----
+## DNS Security Model
 
-## bypass protection
+- Enforces a minimum DNS cache TTL floor to reduce rebinding risk.
+- Rejects hostnames when any resolved IP is blocked.
+- Supports IPv4 + IPv6 resolution (IPv6 can be disabled).
+- Supports recursive CNAME resolution with:
+  - loop detection
+  - configurable max CNAME depth
+- Supports bounded DNS cache size with oldest-entry eviction.
 
-things attackers try that we block:
+## Redirect Security Model
 
-### ip encoding tricks
+- Redirects are disabled by default.
+- If enabled, each redirect target is parsed and validated again.
+- Enforces redirect count limit.
+- Blocks `https -> http` downgrade redirects.
+- Preserves method/body only for `307` and `308`.
 
-```
-2130706433        → 127.0.0.1 (decimal)
-0x7f000001        → 127.0.0.1 (hex)
-0177.0.0.1        → 127.0.0.1 (octal)
-127.1             → 127.0.0.1 (short-form)
-::ffff:127.0.0.1  → 127.0.0.1 (ipv6-mapped)
-```
+## DoS-Oriented Request Limits
 
-### dns attacks
+`safeFetch` enforces:
 
-- **rebinding**: attacker's dns returns public ip first, then localhost. we cache for 60s minimum + pin to validated ip.
-- **multiple a records**: if any resolved ip is blocked, entire hostname is rejected.
+- `connectTimeout`
+- `responseTimeout`
+- `totalTimeout` (absolute request deadline including redirects)
+- `maxResponseSize`
+- `maxResponseHeadersSize`
+- header sanitization (`Authorization`, cookies, token-like headers)
 
-### url tricks
-
-- **null bytes**: `%00`, `%2500` detected and blocked
-- **userinfo confusion**: `http://google.com@evil.com` blocked
-- **backslash**: handled safely
-
-### protocol attacks
-
-blocked: `file://`, `gopher://`, `dict://`, `ftp://`, `data:`, `javascript:`
-
-### redirect attacks
-
-- each hop revalidated
-- https→http blocked (protocol downgrade)
-
----
-
-## error handling
-
-```typescript
-import { safeFetch, RangeError, DNSError } from 'nullspace';
-
-try {
-  await safeFetch(url);
-} catch (error) {
-  if (error.code === 'RANGE_BLOCKED') {
-    console.log('blocked ip:', error.blockedIP);
-  }
-  if (error.code === 'NULL_BYTE_DETECTED') {
-    console.log('injection attempt');
-  }
-}
-```
-
-### error codes
-
-| code | meaning |
-|------|---------|
-| `RANGE_BLOCKED` | ip in private/reserved range |
-| `NULL_BYTE_DETECTED` | null byte injection |
-| `AMBIGUOUS_USERINFO` | multiple @ in url |
-| `MALFORMED_URL` | invalid url |
-| `DNS_ERROR` | resolution failed |
-| `REQUEST_ERROR` | connection issue |
-
----
-
-## full api
+## API
 
 ### `safeFetch(url, options?)`
 
 ```typescript
-const res = await safeFetch('https://api.example.com', {
-  method: 'POST',
-  body: JSON.stringify({ data: 'value' }),
-  headers: { 'Content-Type': 'application/json' },
+const result = await safeFetch('https://api.example.com', {
+  method: 'GET',
+  headers: { Accept: 'application/json' },
   followRedirects: false,
   maxRedirects: 0,
   connectTimeout: 5000,
   responseTimeout: 30000,
+  totalTimeout: 60000,
   maxResponseSize: 10 * 1024 * 1024,
+  maxResponseHeadersSize: 32 * 1024,
   stripSensitiveHeaders: true,
   userAgent: 'nullspace/1.0',
+  allowedHostnames: ['api.example.com'],
 });
 ```
 
-### `validateURL(url)`
+### `validateURL(url, options?)`
 
 ```typescript
-const result = await validateURL('https://api.example.com');
-// { valid: true, parsedURL: {...}, resolvedIPs: [...] }
-// or { valid: false, error: '...', errorCode: 'RANGE_BLOCKED' }
-```
-
-### `isIPAllowed(ip)`
-
-```typescript
-isIPAllowed('8.8.8.8');  // true
-isIPAllowed('10.0.0.1'); // false
+const check = await validateURL('https://api.example.com', {
+  allowedHostnames: ['api.example.com'],
+  dnsTimeout: 3000,
+});
 ```
 
 ### `configureDNSResolver(config)`
 
 ```typescript
-// for testing only - don't use in production
 configureDNSResolver({
-  dnsResolver: async (hostname) => ({ ipv4: ['1.2.3.4'], ipv6: [] }),
   dnsCacheTTLFloor: 60000,
+  dnsCacheMaxEntries: 1024,
+  maxCNAMEDepth: 8,
+  allowIPv6: true,
+  additionalBlockedRanges: ['203.0.114.0/24'],
 });
 ```
 
----
-## design principles
+## Error Codes
 
-> the internal network must exist in a nullspace with respect to user-controlled input: reachable in theory, unreachable in practice.
+### Validation
 
-we avoid the complexity of allowlists. private ranges are blocked by construction, not configuration. there is no `allowPrivate: true` option, as providing such an escape hatch would defeat the fundamental purpose of the library.
+- `MALFORMED_URL`
+- `INVALID_PROTOCOL`
+- `INVALID_HOSTNAME`
+- `INVALID_PORT`
+- `AMBIGUOUS_USERINFO`
+- `NULL_BYTE_DETECTED`
+- `WHITESPACE_IN_HOST`
+- `HOST_NOT_ALLOWED`
 
-every line of code assumes the input is hostile.
+### DNS
+
+- `DNS_ERROR` with reason:
+  - `RESOLUTION_FAILED`
+  - `RESOLUTION_TIMEOUT`
+  - `NO_RECORDS`
+  - `NXDOMAIN`
+
+### Request
+
+- `REQUEST_ERROR` with reason:
+  - `CONNECT_TIMEOUT`
+  - `RESPONSE_TIMEOUT`
+  - `HEADERS_TOO_LARGE`
+  - `RESPONSE_TOO_LARGE`
+  - `CONNECTION_REFUSED`
+  - `CONNECTION_RESET`
+
+### Redirect
+
+- `REDIRECT_BLOCKED` with reason:
+  - `MAX_REDIRECTS_EXCEEDED`
+  - `PROTOCOL_DOWNGRADE`
+  - `CROSS_PROTOCOL`
+  - `INVALID_LOCATION`
+
+## Security Notes
+
+- `dnsResolver` override is intended for testing and controlled environments.
+- `additionalBlockedRanges` is cumulative with built-in range protections.
+- Hostname allowlists are optional and are useful for high-trust outbound integrations.
