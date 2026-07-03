@@ -103,7 +103,7 @@ export function tryCanonicalizeIP(hostname: string): CanonicalIP | null {
     }
 
     // ipv4 check - be more strict here since we're guessing
-    if (/^[0-9a-fA-Fx.]+$/.test(trimmed)) {
+    if (/^[0-9a-fA-FxX.]+$/.test(trimmed)) {
         const bytes = parseIPv4ToBinary(trimmed);
         if (bytes) {
             return {

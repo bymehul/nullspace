@@ -167,7 +167,7 @@ function isIPAddress(hostname: string): boolean {
     // ipv4 - check if all parts are numbers
     const parts = hostname.split('.');
     if (parts.length >= 1 && parts.length <= 4) {
-        const allNumeric = parts.every(p => /^(0x[0-9a-fA-F]+|0[0-7]*|[1-9][0-9]*|0)$/.test(p));
+        const allNumeric = parts.every(p => /^(0[xX][0-9a-fA-F]+|0[0-7]*|[1-9][0-9]*|0)$/.test(p));
         if (allNumeric) {
             return true;
         }
